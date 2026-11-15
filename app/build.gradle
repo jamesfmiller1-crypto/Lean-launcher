@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Every GitHub build gets a higher version number, so Obtainium sees updates.
+def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+
+android {
+    namespace 'nl.home.leanlauncher'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'nl.home.leanlauncher'
+        minSdk 24
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file('../release.keystore')
+            storePassword 'leanlauncher'
+            keyAlias 'lean'
+            keyPassword 'leanlauncher'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
