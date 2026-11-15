@@ -45,6 +45,8 @@ public class WorldView extends View {
     private int birdWait = 60;
     private boolean night = false;
     private boolean running = false;
+    private int weather = 0; // 0 clear, 1 cloudy, 2 rain, 3 snow
+    private final float[][] drops = new float[48][2];
 
     public WorldView(Context ctx) {
         super(ctx);
@@ -58,7 +60,13 @@ public class WorldView extends View {
         for (int[] s : spec) { s[0] = rnd.nextInt(W); s[1] = rnd.nextInt(H); }
         for (int[] s : stars) { s[0] = rnd.nextInt(W); s[1] = rnd.nextInt(45); }
         for (float[] b : bugs) { b[0] = rnd.nextFloat() * W; b[1] = 50 + rnd.nextFloat() * 18; b[2] = rnd.nextFloat() * 6; }
+        for (float[] d : drops) { d[0] = rnd.nextInt(W + 20); d[1] = rnd.nextInt(H); }
         updateNight();
+    }
+
+    /** 0 clear, 1 cloudy, 2 rain, 3 snow. The world follows the real weather. */
+    public void setWeather(int kind) {
+        weather = kind;
     }
 
     /** Called when the user moves to another tile: Pebble sits down for a moment. */
@@ -99,11 +107,18 @@ public class WorldView extends View {
         int[] sky = night
                 ? new int[]{0xFF0B1530, 0xFF13204A, 0xFF1C2C5E, 0xFF24366E}
                 : new int[]{0xFF5BA8E0, 0xFF6FB6E8, 0xFF86C4EE, 0xFFA0D2F2};
+        if (weather >= 1) {
+            sky = night
+                    ? new int[]{0xFF10141C, 0xFF171C26, 0xFF1E2430, 0xFF262D3A}
+                    : new int[]{0xFF8A9AA8, 0xFF97A6B3, 0xFFA5B2BD, 0xFFB4BFC8};
+        }
         for (int i = 0; i < 4; i++) px(0, i * 14, W, 14, sky[i]);
         px(0, 56, W, 52, sky[3]);
 
         // Sun or moon and stars
-        if (night) {
+        if (weather != 0) {
+            // overcast: no sun, moon or stars
+        } else if (night) {
             for (int[] s : stars) if (rnd.nextFloat() > 0.03f) px(s[0], s[1], 1, 1, 0xFFFFFFFF);
             px(150, 10, 10, 10, 0xFFE8E8D0);
             px(152, 12, 3, 3, 0xFFC8C8B0);
@@ -114,11 +129,20 @@ public class WorldView extends View {
 
         // Clouds
         int cloud = night ? 0xFFCFD6E6 : 0xFFFFFFFF;
+        if (weather >= 1) cloud = night ? 0xFF5A6478 : 0xFFD5DAE0;
         for (float[] k : clouds) {
             k[0] += 0.08f;
             if (k[0] > W) k[0] = -k[2];
             px(k[0], k[1], (int) k[2], 4, cloud);
             px(k[0] + 4, k[1] - 3, (int) k[2] - 8, 3, cloud);
+        }
+
+        if (weather >= 1) {
+            for (int i = 0; i < 4; i++) {
+                float cx = ((t * 0.05f + i * 58) % (W + 40)) - 40;
+                px(cx, 5 + i * 7, 34, 5, cloud);
+                px(cx + 6, 2 + i * 7, 20, 3, cloud);
+            }
         }
 
         // Flits: a small flock of birds now and then
@@ -222,6 +246,23 @@ public class WorldView extends View {
                     px(b[0] - 1, b[1] - 1, 3, 3, 0x59E6FF7A);
                     px(b[0], b[1], 1, 1, 0xFFE6FF7A);
                 }
+            }
+        }
+
+        // Rain or snow, following the real weather
+        if (weather == 2) {
+            for (float[] d : drops) {
+                d[1] += 2.2f;
+                d[0] -= 0.5f;
+                if (d[1] > H) { d[1] = 0; d[0] = rnd.nextInt(W + 20); }
+                px(d[0], d[1], 1, 3, 0xAA9CC4E8);
+            }
+        } else if (weather == 3) {
+            for (float[] d : drops) {
+                d[1] += 0.35f;
+                d[0] += (float) Math.sin(t / 20.0 + d[1] / 9.0) * 0.2f;
+                if (d[1] > H) { d[1] = 0; d[0] = rnd.nextInt(W + 20); }
+                px(d[0], d[1], 1, 1, 0xFFFFFFFF);
             }
         }
     }

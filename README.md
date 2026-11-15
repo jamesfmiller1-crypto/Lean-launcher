@@ -6,7 +6,8 @@ A blocky pixel-world home screen for Android TV / Google TV.
 - Original creatures: Pebble (stone golem), Flits (birds), Bloop (peeks from a tree), Glowbugs (night).
 - Clock and date, your chosen apps, "All apps" and "Settings".
 - Animation pauses whenever another app is open.
-- No internet permission: it cannot send data anywhere.
+- The only internet use is the weather, fetched from open-meteo.com (no account, no key). The world shows the real weather: clouds, rain or snow.
+- Maintenance block: free storage, storage settings, app management, weather city.
 - No libraries, a few hundred lines of code.
 
 ## Default apps

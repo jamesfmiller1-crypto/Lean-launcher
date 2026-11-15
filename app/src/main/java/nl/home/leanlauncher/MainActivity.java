@@ -10,6 +10,10 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Environment;
+import android.os.StatFs;
+import android.text.InputType;
+import android.widget.EditText;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -25,6 +29,13 @@ import android.widget.TextClock;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -34,13 +45,13 @@ import java.util.Map;
 
 /**
  * Blocky pixel-world TV home screen. Your apps are blocks in an animated landscape.
- * No network access, no recommendations, no tracking.
+ * No recommendations, no tracking. The only network use is the weather (open-meteo.com).
  */
 public class MainActivity extends Activity {
 
     /** Apps put on the home screen automatically (matched on name), in this order. */
     private static final String[] DEFAULT_APPS = {
-            "smarttube", "youtube", "netflix", "rtl", "iptv extreme", "premiumize"
+            "smarttube", "youtube", "netflix", "rtl", "iptv extreme", "premiumize", "kodi"
     };
 
     private static final int SHADOW = Color.parseColor("#222222");
@@ -55,6 +66,8 @@ public class MainActivity extends Activity {
     private LinearLayout favRow;
     private LinearLayout allAppsList;
     private TextView tip;
+    private TextView weatherText;
+    private long lastWeather = 0;
 
     // ---------------------------------------------------------------- lifecycle
 
@@ -82,6 +95,7 @@ public class MainActivity extends Activity {
         loadApps();
         refreshHome();
         if (allAppsView.getVisibility() == View.VISIBLE) refreshAllApps();
+        loadWeather();
     }
 
     @Override
@@ -220,17 +234,31 @@ public class MainActivity extends Activity {
         home.setClipChildren(false);
         home.setClipToPadding(false);
 
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+
         TextClock clock = new TextClock(this);
         clock.setFormat24Hour("HH:mm");
         clock.setFormat12Hour("HH:mm");
         pixelText(clock, 52);
-        home.addView(clock);
+        left.addView(clock);
 
         TextClock date = new TextClock(this);
         date.setFormat24Hour("EEEE d MMMM");
         date.setFormat12Hour("EEEE d MMMM");
         pixelText(date, 18);
-        home.addView(date);
+        left.addView(date);
+
+        top.addView(left);
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        weatherText = new TextView(this);
+        pixelText(weatherText, 22);
+        weatherText.setGravity(Gravity.END);
+        top.addView(weatherText);
+        home.addView(top, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         home.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1f));
 
@@ -268,13 +296,15 @@ public class MainActivity extends Activity {
             ResolveInfo ri = apps.get(pkg);
             if (ri == null) continue;
             String name = label(ri);
-            favRow.addView(block(BlockDrawable.GRASS, seed++, ri, name, 120,
+            favRow.addView(block(BlockDrawable.GRASS, seed++, ri, name, 100,
                     v -> launch(pkg),
                     v -> { editFavourite(pkg, name); return true; }));
         }
-        favRow.addView(block(BlockDrawable.STONE, seed++, null, "All apps", 120,
+        favRow.addView(block(BlockDrawable.STONE, seed++, null, "All apps", 100,
                 v -> showAllApps(), null));
-        favRow.addView(block(BlockDrawable.STONE, seed, null, "Settings", 120,
+        favRow.addView(block(BlockDrawable.GOLD, seed++, null, "Mainte-\nnance", 100,
+                v -> showMaintenance(), null));
+        favRow.addView(block(BlockDrawable.STONE, seed, null, "Settings", 100,
                 v -> {
                     try {
                         startActivity(new Intent(Settings.ACTION_SETTINGS));
@@ -291,6 +321,137 @@ public class MainActivity extends Activity {
         allAppsView.setVisibility(View.GONE);
         homeView.setVisibility(View.VISIBLE);
         if (favRow.getChildCount() > 0) favRow.getChildAt(0).requestFocus();
+    }
+
+    // ---------------------------------------------------------------- maintenance
+
+    private void showMaintenance() {
+        String title = "Maintenance";
+        try {
+            StatFs fs = new StatFs(Environment.getDataDirectory().getPath());
+            long free = fs.getAvailableBytes() / (1024 * 1024);
+            long total = fs.getTotalBytes() / (1024 * 1024);
+            long pct = total > 0 ? 100 - (free * 100 / total) : 0;
+            title = "Storage: " + free + " MB free of " + total + " MB (" + pct + "% used)"
+                    + (pct >= 93 ? "  - very full!" : "");
+        } catch (Exception ignored) {
+        }
+        String city = prefs.getString("city", null);
+        String[] options = {
+                "Storage settings",
+                "Manage apps (clear cache or uninstall)",
+                city == null ? "Set weather city" : "Change weather city (" + city + ")"
+        };
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle(title)
+                .setItems(options, (d, which) -> {
+                    if (which == 0) openSettings(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);
+                    else if (which == 1) openSettings(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS);
+                    else askCity();
+                })
+                .show();
+    }
+
+    private void openSettings(String action) {
+        try {
+            startActivity(new Intent(action));
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            } catch (Exception e2) {
+                toast("Settings not available");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- weather
+
+    private void askCity() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setHint("City name");
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Weather city")
+                .setView(input)
+                .setPositiveButton("OK", (d, w) -> findCity(input.getText().toString().trim()))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void findCity(final String name) {
+        if (name.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                String json = httpGet("https://geocoding-api.open-meteo.com/v1/search?count=1&name="
+                        + URLEncoder.encode(name, "UTF-8"));
+                JSONObject r = new JSONObject(json).getJSONArray("results").getJSONObject(0);
+                prefs.edit()
+                        .putString("city", r.getString("name"))
+                        .putString("lat", String.valueOf(r.getDouble("latitude")))
+                        .putString("lon", String.valueOf(r.getDouble("longitude")))
+                        .apply();
+                lastWeather = 0;
+                runOnUiThread(this::loadWeather);
+            } catch (Exception e) {
+                runOnUiThread(() -> toast("Couldn't find that city"));
+            }
+        }).start();
+    }
+
+    private void loadWeather() {
+        final String lat = prefs.getString("lat", null);
+        final String lon = prefs.getString("lon", null);
+        final String city = prefs.getString("city", "");
+        if (lat == null || lon == null) {
+            weatherText.setText("Weather: set your city\nin Maintenance");
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastWeather < 30 * 60 * 1000) return; // at most once per half hour
+        lastWeather = now;
+        new Thread(() -> {
+            try {
+                String json = httpGet("https://api.open-meteo.com/v1/forecast?latitude=" + lat
+                        + "&longitude=" + lon + "&current=temperature_2m,weather_code");
+                JSONObject cur = new JSONObject(json).getJSONObject("current");
+                final long temp = Math.round(cur.getDouble("temperature_2m"));
+                final int code = cur.getInt("weather_code");
+                runOnUiThread(() -> showWeather(city, temp, code));
+            } catch (Exception e) {
+                lastWeather = 0;
+                runOnUiThread(() -> weatherText.setText(city + "\nweather unavailable"));
+            }
+        }).start();
+    }
+
+    private void showWeather(String city, long temp, int code) {
+        String desc;
+        int kind;
+        if (code <= 1) { desc = "Clear"; kind = 0; }
+        else if (code <= 3) { desc = code == 2 ? "Partly cloudy" : "Cloudy"; kind = 1; }
+        else if (code <= 48) { desc = "Fog"; kind = 1; }
+        else if (code <= 67) { desc = code <= 57 ? "Drizzle" : "Rain"; kind = 2; }
+        else if (code <= 77) { desc = "Snow"; kind = 3; }
+        else if (code <= 82) { desc = "Showers"; kind = 2; }
+        else if (code <= 86) { desc = "Snow showers"; kind = 3; }
+        else { desc = "Thunderstorm"; kind = 2; }
+        weatherText.setText(temp + "\u00B0C  " + desc + "\n" + city);
+        world.setWeather(kind);
+    }
+
+    private String httpGet(String address) throws Exception {
+        HttpURLConnection con = (HttpURLConnection) new URL(address).openConnection();
+        con.setConnectTimeout(8000);
+        con.setReadTimeout(8000);
+        try (InputStream in = con.getInputStream()) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toString("UTF-8");
+        } finally {
+            con.disconnect();
+        }
     }
 
     // ---------------------------------------------------------------- all apps
@@ -384,7 +545,7 @@ public class MainActivity extends Activity {
         tile.setOnFocusChangeListener((v, focused) -> {
             if (bob[0] != null) bob[0].cancel();
             if (focused) {
-                tip.setText(name);
+                tip.setText(name.replace("-\n", ""));
                 world.onSelect();
                 v.setScaleX(1.12f);
                 v.setScaleY(1.12f);
